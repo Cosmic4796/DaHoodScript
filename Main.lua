@@ -9,12 +9,15 @@ local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main
 local Library = loadstring(game:HttpGet(repo .. 'Library.lua'))()
 local ThemeManager = loadstring(game:HttpGet(repo .. 'addons/ThemeManager.lua'))()
 local SaveManager = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
+local Toggles = Library.Toggles
+local Options = Library.Options
 
 -- Services
 local Players = game:GetService('Players')
 local RunService = game:GetService('RunService')
 local Workspace = game:GetService('Workspace')
 local UserInputService = game:GetService('UserInputService')
+local GuiService = game:GetService('GuiService')
 
 -- Local Player
 local LocalPlayer = Players.LocalPlayer
@@ -47,7 +50,7 @@ local AimbotEnabled = false
 local AimbotFOV = 100
 local AimbotTarget = "Head" -- "Head" or "HumanoidRootPart"
 local FOVCircleEnabled = true
-local FOVCircleTransparency = 0.5 -- User-facing: 0 = invisible, 1 = fully visible
+local FOVCircleTransparency = 0.5 -- 0 = invisible, 1 = fully opaque
 local FOVCircleColor = Color3.fromRGB(255, 255, 255)
 local TracersEnabled = false
 local TracerColor = Color3.fromRGB(255, 0, 0)
@@ -63,7 +66,7 @@ FOVCircle.Radius = AimbotFOV
 FOVCircle.Filled = false
 FOVCircle.Visible = false
 FOVCircle.Color = FOVCircleColor
-FOVCircle.Transparency = 1 - FOVCircleTransparency -- Drawing API: 0=visible, 1=invisible
+FOVCircle.Transparency = FOVCircleTransparency
 
 -- Tracer storage
 local TracerLines = {}
@@ -560,12 +563,37 @@ end)
 -- AIMBOT SYSTEM
 -- =============================================
 local Camera = Workspace.CurrentCamera
-local GuiInset = game:GetService("GuiService"):GetGuiInset()
+local TrackedMousePos = Vector2.zero
+
+local function RefreshMousePosition()
+    local inset = GuiService:GetGuiInset()
+    local rawPos = UserInputService:GetMouseLocation()
+    TrackedMousePos = Vector2.new(rawPos.X - inset.X, rawPos.Y - inset.Y)
+end
+
+RefreshMousePosition()
+
+UserInputService.InputChanged:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
+
+    local inset = GuiService:GetGuiInset()
+
+    if UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter then
+        local cam = Workspace.CurrentCamera or Camera
+        local screenSize = cam and cam.ViewportSize or Vector2.new(1920, 1080)
+        TrackedMousePos = TrackedMousePos + Vector2.new(input.Delta.X, input.Delta.Y)
+        TrackedMousePos = Vector2.new(
+            math.clamp(TrackedMousePos.X, 0, screenSize.X - inset.X),
+            math.clamp(TrackedMousePos.Y, 0, screenSize.Y - inset.Y)
+        )
+    else
+        RefreshMousePosition()
+    end
+end)
 
 local function GetMousePosition()
-    local mousePos = UserInputService:GetMouseLocation()
-    -- Remove GUI inset to get actual screen position
-    return Vector2.new(mousePos.X, mousePos.Y - GuiInset.Y)
+    return TrackedMousePos
 end
 
 local function WorldToScreen(position)
@@ -589,6 +617,21 @@ local function IsPlayerValid(player)
     local targetPart = character:FindFirstChild(AimbotTarget)
     if not targetPart then return false end
     return true
+end
+
+local function MoveMouse(deltaX, deltaY)
+    if mousemoverel then
+        mousemoverel(deltaX, deltaY)
+        return true
+    end
+
+    if mousemoveabs then
+        local current = GetMousePosition()
+        mousemoveabs(current.X + deltaX, current.Y + deltaY)
+        return true
+    end
+
+    return false
 end
 
 local function GetClosestPlayer()
@@ -635,8 +678,11 @@ local function AimAt(player)
             -- Clamp movement to prevent overshooting
             moveX = math.clamp(moveX, -50, 50)
             moveY = math.clamp(moveY, -50, 50)
-            
-            mousemoverel(moveX, moveY)
+
+            if not MoveMouse(moveX, moveY) then
+                -- Fallback: snap camera toward target if mouse move APIs are missing
+                Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPos)
+            end
         end
     end
 end
@@ -659,7 +705,8 @@ local function UpdateTracers()
     end
     
     local screenSize = Camera.ViewportSize
-    local bottomCenter = Vector2.new(screenSize.X / 2, screenSize.Y)
+    local inset = GuiService:GetGuiInset()
+    local bottomCenter = Vector2.new(screenSize.X / 2, screenSize.Y - inset.Y)
     
     local validPlayers = {}
     for _, player in pairs(Players:GetPlayers()) do
@@ -695,7 +742,7 @@ local function UpdateTracers()
         line.To = data.pos
         line.Color = TracerColor
         line.Thickness = 1
-        line.Transparency = 0 -- 0 = fully visible
+        line.Transparency = 1 -- Drawing API: 1 = fully visible
         line.Visible = true
     end
 end
@@ -708,30 +755,41 @@ local function StartAimbot()
     if AimbotConnection then return end
     
     AimbotConnection = RunService.RenderStepped:Connect(function()
-        -- Update camera reference (can change)
-        Camera = Workspace.CurrentCamera
-        
-        -- Update FOV Circle position and settings
-        if FOVCircleEnabled and AimbotEnabled then
-            local mousePos = GetMousePosition()
-            FOVCircle.Position = mousePos
-            FOVCircle.Radius = AimbotFOV
-            FOVCircle.Color = FOVCircleColor
-            FOVCircle.Transparency = 1 - FOVCircleTransparency -- Invert: user 1=visible, Drawing 0=visible
-            FOVCircle.Visible = true
-        else
-            FOVCircle.Visible = false
-        end
-        
-        -- Update tracers (runs even when aimbot is off, as long as tracers are enabled)
-        pcall(UpdateTracers)
-        
-        -- Aimbot logic
-        if AimbotEnabled and AimbotHeld then
-            local target = GetClosestPlayer()
-            if target then
-                AimAt(target)
+        local ok, err = pcall(function()
+            -- Update camera reference (can change)
+            Camera = Workspace.CurrentCamera
+            
+            -- Keep tracked mouse in sync when unlocked
+            if UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCenter then
+                RefreshMousePosition()
             end
+            
+            -- Update FOV Circle position and settings
+            if FOVCircleEnabled and AimbotEnabled then
+                local mousePos = GetMousePosition()
+                FOVCircle.Position = mousePos
+                FOVCircle.Radius = AimbotFOV
+                FOVCircle.Color = FOVCircleColor
+                FOVCircle.Transparency = FOVCircleTransparency
+                FOVCircle.Visible = true
+            else
+                FOVCircle.Visible = false
+            end
+            
+            -- Update tracers (runs even when aimbot is off, as long as tracers are enabled)
+            UpdateTracers()
+            
+            -- Aimbot logic
+            if AimbotEnabled and AimbotHeld then
+                local target = GetClosestPlayer()
+                if target then
+                    AimAt(target)
+                end
+            end
+        end)
+
+        if not ok then
+            warn('[Aimbot Loop Error]', err)
         end
     end)
 end
@@ -743,6 +801,14 @@ local function StopAimbot()
     end
     FOVCircle.Visible = false
     ClearTracers()
+end
+
+local function UpdateAimbotLoop()
+    if AimbotEnabled or TracersEnabled then
+        StartAimbot()
+    else
+        StopAimbot()
+    end
 end
 
 -- Aimbot input handling (right click to aim)
@@ -772,11 +838,10 @@ AimbotSection:AddToggle('AimbotEnabled', {
     Tooltip = 'Right-click to aim at players',
     Callback = function(Value)
         AimbotEnabled = Value
+        UpdateAimbotLoop()
         if Value then
-            StartAimbot()
             Library:Notify('Aimbot enabled! Right-click to aim', 2)
         else
-            StopAimbot()
             Library:Notify('Aimbot disabled', 2)
         end
     end
@@ -843,7 +908,7 @@ FOVSection:AddSlider('FOVTransparency', {
     Tooltip = '0 = invisible, 1 = fully visible',
     Callback = function(Value)
         FOVCircleTransparency = Value
-        FOVCircle.Transparency = 1 - Value -- Invert for Drawing API
+        FOVCircle.Transparency = Value
     end
 })
 
@@ -866,6 +931,7 @@ TracerSection:AddToggle('TracersEnabled', {
     Tooltip = 'Shows lines from screen bottom to players',
     Callback = function(Value)
         TracersEnabled = Value
+        UpdateAimbotLoop()
         if not Value then
             ClearTracers()
         end
