@@ -9,6 +9,8 @@ local repo = 'https://raw.githubusercontent.com/violin-suzutsuki/LinoriaLib/main
 local Library = loadstring(game:HttpGet(repo .. 'Library.lua'))()
 local ThemeManager = loadstring(game:HttpGet(repo .. 'addons/ThemeManager.lua'))()
 local SaveManager = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
+Library.Toggles = Library.Toggles or {}
+Library.Options = Library.Options or {}
 local Toggles = Library.Toggles
 local Options = Library.Options
 
@@ -1194,7 +1196,9 @@ MenuSection:AddLabel('Menu Keybind'):AddKeyPicker('MenuKeybind', {
     Text = 'Menu Keybind'
 })
 
-Library.ToggleKeybind = Options.MenuKeybind
+Options = Library.Options or Options -- resync in case the library rebuilt this table
+local menuKeyOption = Options and (Options.MenuKeybind or Options.MenuKeyBind)
+Library.ToggleKeybind = menuKeyOption or Enum.KeyCode.End
 
 -- Disable keybinds when typing in chat/textboxes
 -- Block keybinds when focused on textbox (chat)
