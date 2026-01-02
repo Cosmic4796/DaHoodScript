@@ -423,68 +423,63 @@ local function StopCFrameSpeed()
 end
 
 -- =============================================
--- CFRAME FLY SYSTEM (Pure CFrame - No BodyMovers)
+-- CFRAME FLY SYSTEM (With Animations & Collision)
 -- =============================================
 local CFrameFlyConnection
-local FlyKeys = {
-    W = false,
-    A = false,
-    S = false,
-    D = false,
-    Space = false,
-    LeftControl = false
-}
+local IsFlying = false
+local FlyUpHeld = false
+local FlyDownHeld = false
 
 local function StartCFrameFly()
     if CFrameFlyConnection then return end
-    
-    local humanoid = GetCharacter() and GetCharacter():FindFirstChildOfClass('Humanoid')
-    if humanoid then
-        humanoid.PlatformStand = true
-    end
+    IsFlying = true
     
     CFrameFlyConnection = RunService.Heartbeat:Connect(function(deltaTime)
         if not CFrameFlyEnabled then return end
         
         local hrp = GetHRP()
-        local camera = Workspace.CurrentCamera
-        if not hrp or not camera then return end
+        local humanoid = GetCharacter() and GetCharacter():FindFirstChildOfClass('Humanoid')
+        if not hrp or not humanoid then return end
         
-        local direction = Vector3.new(0, 0, 0)
-        local camCF = camera.CFrame
+        -- Get movement from WASD (uses character direction, not camera)
+        -- This lets you look around freely while moving
+        local moveDirection = humanoid.MoveDirection
+        local verticalDirection = 0
         
-        local lookVector = Vector3.new(camCF.LookVector.X, 0, camCF.LookVector.Z).Unit
-        local rightVector = Vector3.new(camCF.RightVector.X, 0, camCF.RightVector.Z).Unit
-        
-        if FlyKeys.W then
-            direction = direction + lookVector
+        -- Space = up, Ctrl = down
+        if FlyUpHeld then
+            verticalDirection = 1
         end
-        if FlyKeys.S then
-            direction = direction - lookVector
-        end
-        if FlyKeys.A then
-            direction = direction - rightVector
-        end
-        if FlyKeys.D then
-            direction = direction + rightVector
-        end
-        if FlyKeys.Space then
-            direction = direction + Vector3.new(0, 1, 0)
-        end
-        if FlyKeys.LeftControl then
-            direction = direction - Vector3.new(0, 1, 0)
+        if FlyDownHeld then
+            verticalDirection = -1
         end
         
-        if direction.Magnitude > 0 then
-            local moveAmount = direction.Unit * CFrameFlySpeed * deltaTime
+        -- Calculate horizontal movement (from WASD via MoveDirection)
+        local horizontalMove = Vector3.new(moveDirection.X, 0, moveDirection.Z)
+        
+        -- Calculate vertical movement
+        local verticalMove = Vector3.new(0, verticalDirection, 0)
+        
+        -- Combine movements
+        local totalDirection = horizontalMove + verticalMove
+        
+        if totalDirection.Magnitude > 0 then
+            -- Move character using CFrame
+            local moveAmount = totalDirection.Unit * CFrameFlySpeed * deltaTime
             local newPosition = hrp.Position + moveAmount
             
+            -- Keep current rotation (character faces where you walk)
             local currentRotation = hrp.CFrame - hrp.CFrame.Position
             hrp.CFrame = CFrame.new(newPosition) * currentRotation
         end
         
-        hrp.Velocity = Vector3.new(0, 0, 0)
-        hrp.RotVelocity = Vector3.new(0, 0, 0)
+        -- Anti-gravity: Cancel out falling by countering gravity each frame
+        -- This keeps you floating without noclip and keeps animations
+        local antiGravity = Vector3.new(0, Workspace.Gravity * deltaTime, 0)
+        hrp.Velocity = Vector3.new(hrp.Velocity.X * 0.9, 0, hrp.Velocity.Z * 0.9) + antiGravity * 0
+        
+        -- Keep vertical velocity at 0 to float (but horizontal stays for animations)
+        hrp.Velocity = Vector3.new(hrp.Velocity.X, 0, hrp.Velocity.Z)
     end)
 end
 
@@ -493,32 +488,35 @@ local function StopCFrameFly()
         CFrameFlyConnection:Disconnect()
         CFrameFlyConnection = nil
     end
+    IsFlying = false
     
-    local humanoid = GetCharacter() and GetCharacter():FindFirstChildOfClass('Humanoid')
-    if humanoid then
-        humanoid.PlatformStand = false
+    -- Gentle landing - reduce fall speed
+    local hrp = GetHRP()
+    if hrp then
+        hrp.Velocity = Vector3.new(hrp.Velocity.X, -10, hrp.Velocity.Z)
     end
 end
 
+-- Fly vertical controls (Space/Ctrl)
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     if not CFrameFlyEnabled then return end
     
-    if input.KeyCode == Enum.KeyCode.W then FlyKeys.W = true end
-    if input.KeyCode == Enum.KeyCode.A then FlyKeys.A = true end
-    if input.KeyCode == Enum.KeyCode.S then FlyKeys.S = true end
-    if input.KeyCode == Enum.KeyCode.D then FlyKeys.D = true end
-    if input.KeyCode == Enum.KeyCode.Space then FlyKeys.Space = true end
-    if input.KeyCode == Enum.KeyCode.LeftControl then FlyKeys.LeftControl = true end
+    if input.KeyCode == Enum.KeyCode.Space then 
+        FlyUpHeld = true 
+    end
+    if input.KeyCode == Enum.KeyCode.LeftControl then 
+        FlyDownHeld = true 
+    end
 end)
 
 UserInputService.InputEnded:Connect(function(input)
-    if input.KeyCode == Enum.KeyCode.W then FlyKeys.W = false end
-    if input.KeyCode == Enum.KeyCode.A then FlyKeys.A = false end
-    if input.KeyCode == Enum.KeyCode.S then FlyKeys.S = false end
-    if input.KeyCode == Enum.KeyCode.D then FlyKeys.D = false end
-    if input.KeyCode == Enum.KeyCode.Space then FlyKeys.Space = false end
-    if input.KeyCode == Enum.KeyCode.LeftControl then FlyKeys.LeftControl = false end
+    if input.KeyCode == Enum.KeyCode.Space then 
+        FlyUpHeld = false 
+    end
+    if input.KeyCode == Enum.KeyCode.LeftControl then 
+        FlyDownHeld = false 
+    end
 end)
 
 -- =============================================
