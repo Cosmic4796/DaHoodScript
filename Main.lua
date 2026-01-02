@@ -47,23 +47,23 @@ local AimbotEnabled = false
 local AimbotFOV = 100
 local AimbotTarget = "Head" -- "Head" or "HumanoidRootPart"
 local FOVCircleEnabled = true
-local FOVCircleTransparency = 0.5
+local FOVCircleTransparency = 0.5 -- User-facing: 0 = invisible, 1 = fully visible
 local FOVCircleColor = Color3.fromRGB(255, 255, 255)
 local TracersEnabled = false
 local TracerColor = Color3.fromRGB(255, 0, 0)
 local AimbotKey = Enum.UserInputType.MouseButton2 -- Right click to aim
 local CurrentTarget = nil
-local AimbotSmoothing = 0.5
+local AimbotSmoothing = 0.3 -- Lower default for smoother aim
 
 -- Create FOV Circle
 local FOVCircle = Drawing.new("Circle")
-FOVCircle.Thickness = 1
+FOVCircle.Thickness = 2
 FOVCircle.NumSides = 64
 FOVCircle.Radius = AimbotFOV
 FOVCircle.Filled = false
 FOVCircle.Visible = false
 FOVCircle.Color = FOVCircleColor
-FOVCircle.Transparency = 1 - FOVCircleTransparency
+FOVCircle.Transparency = 1 - FOVCircleTransparency -- Drawing API: 0=visible, 1=invisible
 
 -- Tracer storage
 local TracerLines = {}
@@ -560,13 +560,16 @@ end)
 -- AIMBOT SYSTEM
 -- =============================================
 local Camera = Workspace.CurrentCamera
+local GuiInset = game:GetService("GuiService"):GetGuiInset()
 
 local function GetMousePosition()
-    return UserInputService:GetMouseLocation()
+    local mousePos = UserInputService:GetMouseLocation()
+    -- Remove GUI inset to get actual screen position
+    return Vector2.new(mousePos.X, mousePos.Y - GuiInset.Y)
 end
 
 local function WorldToScreen(position)
-    local screenPos, onScreen = Camera:WorldToViewportPoint(position)
+    local screenPos, onScreen = Camera:WorldToScreenPoint(position)
     return Vector2.new(screenPos.X, screenPos.Y), onScreen, screenPos.Z
 end
 
@@ -620,13 +623,21 @@ local function AimAt(player)
     local screenPos, onScreen = WorldToScreen(targetPos)
     
     if onScreen then
-        local currentPos = GetMousePosition()
-        local delta = screenPos - currentPos
+        local mousePos = GetMousePosition()
+        local delta = screenPos - mousePos
         
-        -- Apply smoothing
-        local smoothedDelta = delta * AimbotSmoothing
-        
-        mousemoverel(smoothedDelta.X, smoothedDelta.Y)
+        -- Only move if delta is significant (prevents jitter)
+        if delta.Magnitude > 1 then
+            -- Smoothing: lower value = slower/smoother, higher = faster/snappier
+            local moveX = delta.X * AimbotSmoothing
+            local moveY = delta.Y * AimbotSmoothing
+            
+            -- Clamp movement to prevent overshooting
+            moveX = math.clamp(moveX, -50, 50)
+            moveY = math.clamp(moveY, -50, 50)
+            
+            mousemoverel(moveX, moveY)
+        end
     end
 end
 
@@ -634,39 +645,58 @@ end
 local function ClearTracers()
     for _, line in pairs(TracerLines) do
         if line then
-            line:Remove()
+            pcall(function() line:Remove() end)
         end
     end
     TracerLines = {}
 end
 
--- Update tracers
+-- Update tracers (reuse existing lines instead of recreating)
 local function UpdateTracers()
-    ClearTracers()
-    
-    if not TracersEnabled then return end
+    if not TracersEnabled then 
+        ClearTracers()
+        return 
+    end
     
     local screenSize = Camera.ViewportSize
     local bottomCenter = Vector2.new(screenSize.X / 2, screenSize.Y)
     
+    local validPlayers = {}
     for _, player in pairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and IsPlayerValid(player) then
+        if player ~= LocalPlayer then
             local character = player.Character
+            local humanoid = character and character:FindFirstChildOfClass("Humanoid")
             local hrp = character and character:FindFirstChild("HumanoidRootPart")
-            if hrp then
+            
+            if character and humanoid and humanoid.Health > 0 and hrp then
                 local screenPos, onScreen, depth = WorldToScreen(hrp.Position)
                 if onScreen and depth > 0 then
-                    local line = Drawing.new("Line")
-                    line.From = bottomCenter
-                    line.To = screenPos
-                    line.Color = TracerColor
-                    line.Thickness = 1
-                    line.Transparency = 1
-                    line.Visible = true
-                    table.insert(TracerLines, line)
+                    table.insert(validPlayers, {pos = screenPos, player = player})
                 end
             end
         end
+    end
+    
+    -- Remove extra tracer lines
+    while #TracerLines > #validPlayers do
+        local line = table.remove(TracerLines)
+        if line then pcall(function() line:Remove() end) end
+    end
+    
+    -- Update or create tracer lines
+    for i, data in ipairs(validPlayers) do
+        local line = TracerLines[i]
+        if not line then
+            line = Drawing.new("Line")
+            TracerLines[i] = line
+        end
+        
+        line.From = bottomCenter
+        line.To = data.pos
+        line.Color = TracerColor
+        line.Thickness = 1
+        line.Transparency = 0 -- 0 = fully visible
+        line.Visible = true
     end
 end
 
@@ -678,24 +708,23 @@ local function StartAimbot()
     if AimbotConnection then return end
     
     AimbotConnection = RunService.RenderStepped:Connect(function()
+        -- Update camera reference (can change)
+        Camera = Workspace.CurrentCamera
+        
         -- Update FOV Circle position and settings
         if FOVCircleEnabled and AimbotEnabled then
             local mousePos = GetMousePosition()
             FOVCircle.Position = mousePos
             FOVCircle.Radius = AimbotFOV
             FOVCircle.Color = FOVCircleColor
-            FOVCircle.Transparency = 1 - FOVCircleTransparency
+            FOVCircle.Transparency = 1 - FOVCircleTransparency -- Invert: user 1=visible, Drawing 0=visible
             FOVCircle.Visible = true
         else
             FOVCircle.Visible = false
         end
         
-        -- Update tracers
-        if TracersEnabled then
-            pcall(UpdateTracers)
-        else
-            ClearTracers()
-        end
+        -- Update tracers (runs even when aimbot is off, as long as tracers are enabled)
+        pcall(UpdateTracers)
         
         -- Aimbot logic
         if AimbotEnabled and AimbotHeld then
@@ -766,8 +795,8 @@ AimbotSection:AddDropdown('AimbotTargetPart', {
 
 AimbotSection:AddSlider('AimbotSmoothing', {
     Text = 'Smoothing',
-    Default = 0.5,
-    Min = 0.1,
+    Default = 0.3,
+    Min = 0.05,
     Max = 1,
     Rounding = 2,
     Compact = false,
@@ -805,7 +834,7 @@ FOVSection:AddSlider('FOVSize', {
 })
 
 FOVSection:AddSlider('FOVTransparency', {
-    Text = 'FOV Transparency',
+    Text = 'FOV Opacity',
     Default = 0.5,
     Min = 0,
     Max = 1,
@@ -814,7 +843,7 @@ FOVSection:AddSlider('FOVTransparency', {
     Tooltip = '0 = invisible, 1 = fully visible',
     Callback = function(Value)
         FOVCircleTransparency = Value
-        FOVCircle.Transparency = 1 - Value
+        FOVCircle.Transparency = 1 - Value -- Invert for Drawing API
     end
 })
 
@@ -1102,13 +1131,6 @@ MenuSection:AddLabel('Menu Keybind'):AddKeyPicker('MenuKeybind', {
 Library.ToggleKeybind = Options.MenuKeybind
 
 -- Disable keybinds when typing in chat/textboxes
--- Override Linoria's key check to ignore inputs while typing
-local OldKeyCheck = getmetatable(Options).__index
-getmetatable(Options).__index = function(self, key)
-    local option = OldKeyCheck(self, key)
-    return option
-end
-
 -- Block keybinds when focused on textbox (chat)
 UserInputService.TextBoxFocused:Connect(function()
     Library:SetKeybindState(false)
@@ -1128,8 +1150,47 @@ SaveManager:SetIgnoreIndexes({ 'MenuKeybind' })
 ThemeManager:SetFolder('DaHoodScript')
 SaveManager:SetFolder('DaHoodScript/configs')
 
-SaveManager:BuildConfigSection(Tabs.Settings)
-ThemeManager:ApplyToTab(Tabs.Settings)
+-- Add Config Section (Right side)
+local ConfigSection = Tabs.Settings:AddRightGroupbox('Configuration')
+SaveManager:BuildConfigSection(ConfigSection)
+
+-- Add Theme Section (Right side, below config)
+local ThemeSection = Tabs.Settings:AddRightGroupbox('Themes')
+ThemeManager:BuildThemeSection(ThemeSection)
+
+-- Add Menu Settings (Left side)
+local MenuSettingsSection = Tabs.Settings:AddLeftGroupbox('Menu Settings')
+
+MenuSettingsSection:AddToggle('KeybindDisplay', {
+    Text = 'Show Keybind List',
+    Default = true,
+    Tooltip = 'Shows active keybinds on screen',
+    Callback = function(Value)
+        Library.KeybindFrame.Visible = Value
+    end
+})
+
+MenuSettingsSection:AddToggle('WatermarkToggle', {
+    Text = 'Show Watermark',
+    Default = true,
+    Tooltip = 'Shows watermark on screen',
+    Callback = function(Value)
+        Library:SetWatermarkVisibility(Value)
+    end
+})
+
+MenuSettingsSection:AddSlider('MenuTransparency', {
+    Text = 'Menu Transparency',
+    Default = 0,
+    Min = 0,
+    Max = 50,
+    Rounding = 0,
+    Compact = false,
+    Tooltip = 'Adjusts menu background transparency',
+    Callback = function(Value)
+        Library:SetTransparency(Value / 100)
+    end
+})
 
 -- Load autoload config
 SaveManager:LoadAutoloadConfig()
