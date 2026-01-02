@@ -21,9 +21,13 @@ local LocalPlayer = Players.LocalPlayer
 -- Variables
 local CashAuraEnabled = false
 local CashAuraRange = 25
+local CashDropEnabled = false
+local CashDropDelay = 5
 local ESPEnabled = false
 local ShowNames = true
+local MoneyESPEnabled = false
 local ESPObjects = {}
+local MoneyESPObjects = {}
 
 -- Create Window
 local Window = Library:CreateWindow({
@@ -60,70 +64,60 @@ end
 -- =============================================
 -- CASH AURA SYSTEM
 -- =============================================
+local CashAuraConnection
+
 local function CollectCash()
     local hrp = GetHRP()
     if not hrp then return end
+    
+    local myPosition = hrp.Position
     
     -- Da Hood stores dropped items in Workspace.Ignored.Drop
     local droppedItems = Workspace:FindFirstChild('Ignored') and Workspace.Ignored:FindFirstChild('Drop')
     if not droppedItems then return end
     
     for _, item in pairs(droppedItems:GetChildren()) do
-        -- Cash drops in Da Hood are usually Parts or Models with TouchTransmitter
-        local itemPart = nil
-        local itemPos = nil
+        if not CashAuraEnabled then break end
         
-        if item:IsA('Model') then
-            -- Check for Handle or PrimaryPart
-            itemPart = item:FindFirstChild('Handle') or item.PrimaryPart or item:FindFirstChildWhichIsA('BasePart')
-            if itemPart then
-                itemPos = itemPart.Position
-            end
-        elseif item:IsA('BasePart') then
-            itemPart = item
-            itemPos = item.Position
-        end
-        
-        if itemPart and itemPos and GetDistance(hrp.Position, itemPos) <= CashAuraRange then
-            -- Find TouchTransmitter (this is what detects pickup)
-            local touchPart = itemPart
-            local touchInterest = touchPart:FindFirstChildOfClass('TouchTransmitter')
+        -- Cash in Da Hood is called "MoneyDrop"
+        if item.Name == 'MoneyDrop' and item:IsA('BasePart') then
+            local cashPosition = item.Position
+            local distance = (myPosition - cashPosition).Magnitude
             
-            -- If not on main part, search children
-            if not touchInterest and item:IsA('Model') then
-                for _, child in pairs(item:GetDescendants()) do
-                    if child:IsA('TouchTransmitter') then
-                        touchInterest = child
-                        touchPart = child.Parent
-                        break
-                    end
+            -- Only pick up if within range
+            if distance <= CashAuraRange then
+                local clickDetector = item:FindFirstChildOfClass('ClickDetector')
+                if clickDetector then
+                    fireclickdetector(clickDetector)
                 end
-            end
-            
-            if touchInterest and touchPart then
-                -- Use firetouchinterest to simulate touching the cash
-                firetouchinterest(hrp, touchPart, 0)
-                task.wait()
-                firetouchinterest(hrp, touchPart, 1)
             end
         end
     end
 end
 
--- Cash Aura Loop
-local CashAuraConnection
 local function StartCashAura()
     if CashAuraConnection then return end
-    CashAuraConnection = RunService.Heartbeat:Connect(function()
-        if CashAuraEnabled then
+    
+    CashAuraConnection = task.spawn(function()
+        while CashAuraEnabled do
             pcall(CollectCash)
+            task.wait(0.1)
         end
     end)
+end
+
+local function StopCashAura()
+    if CashAuraConnection then
+        task.cancel(CashAuraConnection)
+        CashAuraConnection = nil
+    end
 end
 
 -- =============================================
 -- CASH DROP SYSTEM
 -- =============================================
+local CashDropConnection
+
 local function DropCash(amount)
     -- Da Hood: MainEvent with "DropMoney" and amount as STRING
     local ReplicatedStorage = game:GetService('ReplicatedStorage')
@@ -133,6 +127,24 @@ local function DropCash(amount)
         pcall(function()
             mainEvent:FireServer('DropMoney', tostring(amount))
         end)
+    end
+end
+
+local function StartCashDrop()
+    if CashDropConnection then return end
+    
+    CashDropConnection = task.spawn(function()
+        while CashDropEnabled do
+            DropCash(15000)
+            task.wait(CashDropDelay)
+        end
+    end)
+end
+
+local function StopCashDrop()
+    if CashDropConnection then
+        task.cancel(CashDropConnection)
+        CashDropConnection = nil
     end
 end
 
@@ -275,6 +287,71 @@ Players.PlayerRemoving:Connect(function(player)
 end)
 
 -- =============================================
+-- MONEY ESP SYSTEM
+-- =============================================
+local MoneyESPConnection
+
+local function ClearMoneyESP()
+    for part, highlight in pairs(MoneyESPObjects) do
+        if highlight then
+            highlight:Destroy()
+        end
+    end
+    MoneyESPObjects = {}
+end
+
+local function UpdateMoneyESP()
+    if not MoneyESPEnabled then
+        ClearMoneyESP()
+        return
+    end
+    
+    local droppedItems = Workspace:FindFirstChild('Ignored') and Workspace.Ignored:FindFirstChild('Drop')
+    if not droppedItems then return end
+    
+    -- Remove highlights for money that no longer exists
+    for part, highlight in pairs(MoneyESPObjects) do
+        if not part or not part.Parent then
+            if highlight then highlight:Destroy() end
+            MoneyESPObjects[part] = nil
+        end
+    end
+    
+    -- Add highlights for new money
+    for _, item in pairs(droppedItems:GetChildren()) do
+        if item.Name == 'MoneyDrop' and item:IsA('BasePart') then
+            if not MoneyESPObjects[item] then
+                local highlight = Instance.new('Highlight')
+                highlight.FillColor = Color3.fromRGB(0, 255, 0)
+                highlight.FillTransparency = 0.5
+                highlight.OutlineColor = Color3.fromRGB(0, 255, 0)
+                highlight.OutlineTransparency = 0
+                highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+                highlight.Parent = item
+                MoneyESPObjects[item] = highlight
+            end
+        end
+    end
+end
+
+local function StartMoneyESP()
+    if MoneyESPConnection then return end
+    MoneyESPConnection = RunService.Heartbeat:Connect(function()
+        if MoneyESPEnabled then
+            pcall(UpdateMoneyESP)
+        end
+    end)
+end
+
+local function StopMoneyESP()
+    if MoneyESPConnection then
+        MoneyESPConnection:Disconnect()
+        MoneyESPConnection = nil
+    end
+    ClearMoneyESP()
+end
+
+-- =============================================
 -- MAIN TAB UI
 -- =============================================
 local CashSection = Tabs.Main:AddLeftGroupbox('Cash')
@@ -287,6 +364,8 @@ CashSection:AddToggle('CashAura', {
         CashAuraEnabled = Value
         if Value then
             StartCashAura()
+        else
+            StopCashAura()
         end
     end
 })
@@ -303,24 +382,20 @@ CashSection:AddSlider('CashRange', {
     end
 })
 
-CashSection:AddButton({
-    Text = 'Drop $15,000',
-    Func = function()
-        DropCash(15000)
-        Library:Notify('Dropped $15,000!', 2)
-    end,
-    DoubleClick = false,
-    Tooltip = 'Drops $15,000 from your wallet'
-})
-
-CashSection:AddButton({
-    Text = 'Drop $5,000',
-    Func = function()
-        DropCash(5000)
-        Library:Notify('Dropped $5,000!', 2)
-    end,
-    DoubleClick = false,
-    Tooltip = 'Drops $5,000 from your wallet'
+CashSection:AddToggle('CashDrop', {
+    Text = 'Auto Drop $15,000',
+    Default = false,
+    Tooltip = 'Drops $15,000 every 5 seconds',
+    Callback = function(Value)
+        CashDropEnabled = Value
+        if Value then
+            StartCashDrop()
+            Library:Notify('Auto dropping $15,000 every 5 seconds', 2)
+        else
+            StopCashDrop()
+            Library:Notify('Stopped auto drop', 2)
+        end
+    end
 })
 
 -- =============================================
@@ -351,6 +426,20 @@ ESPSection:AddToggle('ShowNames', {
     end
 })
 
+ESPSection:AddToggle('MoneyESP', {
+    Text = 'Money ESP',
+    Default = false,
+    Tooltip = 'Highlights dropped cash',
+    Callback = function(Value)
+        MoneyESPEnabled = Value
+        if Value then
+            StartMoneyESP()
+        else
+            StopMoneyESP()
+        end
+    end
+})
+
 -- =============================================
 -- SETTINGS TAB UI
 -- =============================================
@@ -360,9 +449,12 @@ MenuSection:AddButton({
     Text = 'Unload Script',
     Func = function()
         -- Cleanup
-        if CashAuraConnection then
-            CashAuraConnection:Disconnect()
-        end
+        CashAuraEnabled = false
+        CashDropEnabled = false
+        MoneyESPEnabled = false
+        StopCashAura()
+        StopCashDrop()
+        StopMoneyESP()
         if ESPUpdateConnection then
             ESPUpdateConnection:Disconnect()
         end
