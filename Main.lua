@@ -38,6 +38,12 @@ local MoneyESPObjects = {}
 local CFrameSpeedEnabled = false
 local CFrameSpeedValue = 1.5
 
+-- CFrame Fly Variables
+local CFrameFlyEnabled = false
+local CFrameFlySpeed = 50
+local FlyBodyGyro = nil
+local FlyBodyVelocity = nil
+
 -- Create Window
 local Window = Library:CreateWindow({
     Title = 'Da Hood',
@@ -419,6 +425,131 @@ local function StopCFrameSpeed()
 end
 
 -- =============================================
+-- CFRAME FLY SYSTEM
+-- =============================================
+local CFrameFlyConnection
+local FlyKeys = {
+    W = false,
+    A = false,
+    S = false,
+    D = false,
+    Space = false,
+    LeftControl = false
+}
+
+local function StartCFrameFly()
+    if CFrameFlyConnection then return end
+    
+    local hrp = GetHRP()
+    local humanoid = GetCharacter() and GetCharacter():FindFirstChildOfClass('Humanoid')
+    if not hrp or not humanoid then return end
+    
+    -- Create BodyGyro to stabilize rotation
+    FlyBodyGyro = Instance.new('BodyGyro')
+    FlyBodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    FlyBodyGyro.P = 9e4
+    FlyBodyGyro.Parent = hrp
+    
+    -- Create BodyVelocity for movement
+    FlyBodyVelocity = Instance.new('BodyVelocity')
+    FlyBodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+    FlyBodyVelocity.Velocity = Vector3.new(0, 0, 0)
+    FlyBodyVelocity.Parent = hrp
+    
+    -- Disable falling
+    humanoid.PlatformStand = true
+    
+    CFrameFlyConnection = RunService.Heartbeat:Connect(function()
+        if not CFrameFlyEnabled then return end
+        
+        local hrp = GetHRP()
+        local camera = Workspace.CurrentCamera
+        if not hrp or not camera then return end
+        
+        -- Update gyro to match camera
+        if FlyBodyGyro then
+            FlyBodyGyro.CFrame = camera.CFrame
+        end
+        
+        -- Calculate movement direction
+        local direction = Vector3.new(0, 0, 0)
+        local camCF = camera.CFrame
+        
+        if FlyKeys.W then
+            direction = direction + camCF.LookVector
+        end
+        if FlyKeys.S then
+            direction = direction - camCF.LookVector
+        end
+        if FlyKeys.A then
+            direction = direction - camCF.RightVector
+        end
+        if FlyKeys.D then
+            direction = direction + camCF.RightVector
+        end
+        if FlyKeys.Space then
+            direction = direction + Vector3.new(0, 1, 0)
+        end
+        if FlyKeys.LeftControl then
+            direction = direction - Vector3.new(0, 1, 0)
+        end
+        
+        -- Apply velocity
+        if FlyBodyVelocity then
+            if direction.Magnitude > 0 then
+                FlyBodyVelocity.Velocity = direction.Unit * CFrameFlySpeed
+            else
+                FlyBodyVelocity.Velocity = Vector3.new(0, 0, 0)
+            end
+        end
+    end)
+end
+
+local function StopCFrameFly()
+    if CFrameFlyConnection then
+        CFrameFlyConnection:Disconnect()
+        CFrameFlyConnection = nil
+    end
+    
+    if FlyBodyGyro then
+        FlyBodyGyro:Destroy()
+        FlyBodyGyro = nil
+    end
+    
+    if FlyBodyVelocity then
+        FlyBodyVelocity:Destroy()
+        FlyBodyVelocity = nil
+    end
+    
+    local humanoid = GetCharacter() and GetCharacter():FindFirstChildOfClass('Humanoid')
+    if humanoid then
+        humanoid.PlatformStand = false
+    end
+end
+
+-- Fly key detection
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if not CFrameFlyEnabled then return end
+    
+    if input.KeyCode == Enum.KeyCode.W then FlyKeys.W = true end
+    if input.KeyCode == Enum.KeyCode.A then FlyKeys.A = true end
+    if input.KeyCode == Enum.KeyCode.S then FlyKeys.S = true end
+    if input.KeyCode == Enum.KeyCode.D then FlyKeys.D = true end
+    if input.KeyCode == Enum.KeyCode.Space then FlyKeys.Space = true end
+    if input.KeyCode == Enum.KeyCode.LeftControl then FlyKeys.LeftControl = true end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.W then FlyKeys.W = false end
+    if input.KeyCode == Enum.KeyCode.A then FlyKeys.A = false end
+    if input.KeyCode == Enum.KeyCode.S then FlyKeys.S = false end
+    if input.KeyCode == Enum.KeyCode.D then FlyKeys.D = false end
+    if input.KeyCode == Enum.KeyCode.Space then FlyKeys.Space = false end
+    if input.KeyCode == Enum.KeyCode.LeftControl then FlyKeys.LeftControl = false end
+end)
+
+-- =============================================
 -- MAIN TAB UI
 -- =============================================
 local CashSection = Tabs.Main:AddLeftGroupbox('Cash')
@@ -496,12 +627,49 @@ MovementSection:AddSlider('SpeedMultiplier', {
     Text = 'Speed Multiplier',
     Default = 1.5,
     Min = 1.1,
-    Max = 3,
+    Max = 5,
     Rounding = 1,
     Compact = false,
     Tooltip = '1.5-2x is safest, higher may get detected',
     Callback = function(Value)
         CFrameSpeedValue = Value
+    end
+})
+
+MovementSection:AddDivider()
+
+MovementSection:AddToggle('CFrameFly', {
+    Text = 'CFrame Fly',
+    Default = false,
+    Tooltip = 'Fly using WASD + Space/Ctrl',
+    Callback = function(Value)
+        CFrameFlyEnabled = Value
+        if Value then
+            StartCFrameFly()
+            Library:Notify('Flying! WASD to move, Space/Ctrl for up/down', 3)
+        else
+            StopCFrameFly()
+            Library:Notify('Fly disabled', 2)
+        end
+    end
+}):AddKeyPicker('FlyKey', {
+    Default = 'F',
+    SyncToggleState = true,
+    Mode = 'Toggle',
+    Text = 'Fly',
+    NoUI = false
+})
+
+MovementSection:AddSlider('FlySpeed', {
+    Text = 'Fly Speed',
+    Default = 50,
+    Min = 10,
+    Max = 200,
+    Rounding = 0,
+    Compact = false,
+    Tooltip = 'How fast you fly',
+    Callback = function(Value)
+        CFrameFlySpeed = Value
     end
 })
 
@@ -599,10 +767,12 @@ MenuSection:AddButton({
         CashDropEnabled = false
         MoneyESPEnabled = false
         CFrameSpeedEnabled = false
+        CFrameFlyEnabled = false
         StopCashAura()
         StopCashDrop()
         StopMoneyESP()
         StopCFrameSpeed()
+        StopCFrameFly()
         if ESPUpdateConnection then
             ESPUpdateConnection:Disconnect()
         end
