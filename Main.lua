@@ -14,6 +14,7 @@ local SaveManager = loadstring(game:HttpGet(repo .. 'addons/SaveManager.lua'))()
 local Players = game:GetService('Players')
 local RunService = game:GetService('RunService')
 local Workspace = game:GetService('Workspace')
+local UserInputService = game:GetService('UserInputService')
 
 -- Local Player
 local LocalPlayer = Players.LocalPlayer
@@ -32,6 +33,10 @@ local ESPTextSize = 14
 local UseHealthColor = true
 local ESPObjects = {}
 local MoneyESPObjects = {}
+
+-- CFrame Speed Variables
+local CFrameSpeedEnabled = false
+local CFrameSpeedValue = 1.5
 
 -- Create Window
 local Window = Library:CreateWindow({
@@ -369,6 +374,51 @@ local function StopMoneyESP()
 end
 
 -- =============================================
+-- CFRAME SPEED SYSTEM (Undetectable)
+-- =============================================
+local CFrameSpeedConnection
+local MovingDirection = Vector3.new(0, 0, 0)
+
+local function GetMovementDirection()
+    local hrp = GetHRP()
+    local humanoid = GetCharacter() and GetCharacter():FindFirstChildOfClass('Humanoid')
+    if not hrp or not humanoid then return Vector3.new(0, 0, 0) end
+    
+    local moveDirection = humanoid.MoveDirection
+    if moveDirection.Magnitude > 0 then
+        return moveDirection.Unit
+    end
+    return Vector3.new(0, 0, 0)
+end
+
+local function StartCFrameSpeed()
+    if CFrameSpeedConnection then return end
+    
+    CFrameSpeedConnection = RunService.Heartbeat:Connect(function(deltaTime)
+        if not CFrameSpeedEnabled then return end
+        
+        local hrp = GetHRP()
+        local humanoid = GetCharacter() and GetCharacter():FindFirstChildOfClass('Humanoid')
+        if not hrp or not humanoid then return end
+        
+        local moveDir = GetMovementDirection()
+        if moveDir.Magnitude > 0 then
+            -- Apply extra movement based on CFrame (looks natural)
+            local extraSpeed = (CFrameSpeedValue - 1) * humanoid.WalkSpeed * deltaTime
+            local newPos = hrp.Position + (moveDir * extraSpeed)
+            hrp.CFrame = CFrame.new(newPos) * CFrame.Angles(hrp.CFrame:ToEulerAnglesXYZ())
+        end
+    end)
+end
+
+local function StopCFrameSpeed()
+    if CFrameSpeedConnection then
+        CFrameSpeedConnection:Disconnect()
+        CFrameSpeedConnection = nil
+    end
+end
+
+-- =============================================
 -- MAIN TAB UI
 -- =============================================
 local CashSection = Tabs.Main:AddLeftGroupbox('Cash')
@@ -376,7 +426,7 @@ local CashSection = Tabs.Main:AddLeftGroupbox('Cash')
 CashSection:AddToggle('CashAura', {
     Text = 'Cash Aura',
     Default = false,
-    Tooltip = 'Automatically collects nearby cash',
+    Tooltip = 'Teleports to nearby cash to collect it',
     Callback = function(Value)
         CashAuraEnabled = Value
         if Value then
@@ -412,6 +462,46 @@ CashSection:AddToggle('CashDrop', {
             StopCashDrop()
             Library:Notify('Stopped cash drop', 2)
         end
+    end
+})
+
+-- =============================================
+-- MOVEMENT SECTION
+-- =============================================
+local MovementSection = Tabs.Main:AddRightGroupbox('Movement')
+
+MovementSection:AddToggle('CFrameSpeed', {
+    Text = 'CFrame Speed',
+    Default = false,
+    Tooltip = 'Undetectable speed boost using CFrame',
+    Callback = function(Value)
+        CFrameSpeedEnabled = Value
+        if Value then
+            StartCFrameSpeed()
+            Library:Notify('CFrame Speed enabled!', 2)
+        else
+            StopCFrameSpeed()
+            Library:Notify('CFrame Speed disabled', 2)
+        end
+    end
+}):AddKeyPicker('CFrameSpeedKey', {
+    Default = 'V',
+    SyncToggleState = true,
+    Mode = 'Toggle',
+    Text = 'CFrame Speed',
+    NoUI = false
+})
+
+MovementSection:AddSlider('SpeedMultiplier', {
+    Text = 'Speed Multiplier',
+    Default = 1.5,
+    Min = 1.1,
+    Max = 3,
+    Rounding = 1,
+    Compact = false,
+    Tooltip = '1.5-2x is safest, higher may get detected',
+    Callback = function(Value)
+        CFrameSpeedValue = Value
     end
 })
 
@@ -508,9 +598,11 @@ MenuSection:AddButton({
         CashAuraEnabled = false
         CashDropEnabled = false
         MoneyESPEnabled = false
+        CFrameSpeedEnabled = false
         StopCashAura()
         StopCashDrop()
         StopMoneyESP()
+        StopCFrameSpeed()
         if ESPUpdateConnection then
             ESPUpdateConnection:Disconnect()
         end
