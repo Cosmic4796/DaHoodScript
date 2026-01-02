@@ -41,8 +41,6 @@ local CFrameSpeedValue = 1.5
 -- CFrame Fly Variables
 local CFrameFlyEnabled = false
 local CFrameFlySpeed = 50
-local FlyBodyGyro = nil
-local FlyBodyVelocity = nil
 
 -- Create Window
 local Window = Library:CreateWindow({
@@ -425,7 +423,7 @@ local function StopCFrameSpeed()
 end
 
 -- =============================================
--- CFRAME FLY SYSTEM
+-- CFRAME FLY SYSTEM (Pure CFrame - No BodyMovers)
 -- =============================================
 local CFrameFlyConnection
 local FlyKeys = {
@@ -440,52 +438,35 @@ local FlyKeys = {
 local function StartCFrameFly()
     if CFrameFlyConnection then return end
     
-    local hrp = GetHRP()
     local humanoid = GetCharacter() and GetCharacter():FindFirstChildOfClass('Humanoid')
-    if not hrp or not humanoid then return end
+    if humanoid then
+        humanoid.PlatformStand = true
+    end
     
-    -- Create BodyGyro to stabilize rotation
-    FlyBodyGyro = Instance.new('BodyGyro')
-    FlyBodyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-    FlyBodyGyro.P = 9e4
-    FlyBodyGyro.Parent = hrp
-    
-    -- Create BodyVelocity for movement
-    FlyBodyVelocity = Instance.new('BodyVelocity')
-    FlyBodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
-    FlyBodyVelocity.Velocity = Vector3.new(0, 0, 0)
-    FlyBodyVelocity.Parent = hrp
-    
-    -- Disable falling
-    humanoid.PlatformStand = true
-    
-    CFrameFlyConnection = RunService.Heartbeat:Connect(function()
+    CFrameFlyConnection = RunService.Heartbeat:Connect(function(deltaTime)
         if not CFrameFlyEnabled then return end
         
         local hrp = GetHRP()
         local camera = Workspace.CurrentCamera
         if not hrp or not camera then return end
         
-        -- Update gyro to match camera
-        if FlyBodyGyro then
-            FlyBodyGyro.CFrame = camera.CFrame
-        end
-        
-        -- Calculate movement direction
         local direction = Vector3.new(0, 0, 0)
         local camCF = camera.CFrame
         
+        local lookVector = Vector3.new(camCF.LookVector.X, 0, camCF.LookVector.Z).Unit
+        local rightVector = Vector3.new(camCF.RightVector.X, 0, camCF.RightVector.Z).Unit
+        
         if FlyKeys.W then
-            direction = direction + camCF.LookVector
+            direction = direction + lookVector
         end
         if FlyKeys.S then
-            direction = direction - camCF.LookVector
+            direction = direction - lookVector
         end
         if FlyKeys.A then
-            direction = direction - camCF.RightVector
+            direction = direction - rightVector
         end
         if FlyKeys.D then
-            direction = direction + camCF.RightVector
+            direction = direction + rightVector
         end
         if FlyKeys.Space then
             direction = direction + Vector3.new(0, 1, 0)
@@ -494,14 +475,16 @@ local function StartCFrameFly()
             direction = direction - Vector3.new(0, 1, 0)
         end
         
-        -- Apply velocity
-        if FlyBodyVelocity then
-            if direction.Magnitude > 0 then
-                FlyBodyVelocity.Velocity = direction.Unit * CFrameFlySpeed
-            else
-                FlyBodyVelocity.Velocity = Vector3.new(0, 0, 0)
-            end
+        if direction.Magnitude > 0 then
+            local moveAmount = direction.Unit * CFrameFlySpeed * deltaTime
+            local newPosition = hrp.Position + moveAmount
+            
+            local currentRotation = hrp.CFrame - hrp.CFrame.Position
+            hrp.CFrame = CFrame.new(newPosition) * currentRotation
         end
+        
+        hrp.Velocity = Vector3.new(0, 0, 0)
+        hrp.RotVelocity = Vector3.new(0, 0, 0)
     end)
 end
 
@@ -511,23 +494,12 @@ local function StopCFrameFly()
         CFrameFlyConnection = nil
     end
     
-    if FlyBodyGyro then
-        FlyBodyGyro:Destroy()
-        FlyBodyGyro = nil
-    end
-    
-    if FlyBodyVelocity then
-        FlyBodyVelocity:Destroy()
-        FlyBodyVelocity = nil
-    end
-    
     local humanoid = GetCharacter() and GetCharacter():FindFirstChildOfClass('Humanoid')
     if humanoid then
         humanoid.PlatformStand = false
     end
 end
 
--- Fly key detection
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     if not CFrameFlyEnabled then return end
