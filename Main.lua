@@ -20,6 +20,7 @@ local RunService = game:GetService('RunService')
 local Workspace = game:GetService('Workspace')
 local UserInputService = game:GetService('UserInputService')
 local GuiService = game:GetService('GuiService')
+local TweenService = game:GetService('TweenService')
 
 -- Local Player
 local LocalPlayer = Players.LocalPlayer
@@ -59,6 +60,8 @@ local TracerColor = Color3.fromRGB(255, 0, 0)
 local AimbotKey = Enum.UserInputType.MouseButton2 -- Right click to aim
 local CurrentTarget = nil
 local AimbotSmoothing = 0.3 -- Lower default for smoother aim
+local AimbotLockMode = "Mouse" -- "Mouse" or "Camera"
+local AimbotCameraTween = 0 -- Seconds; 0 = instant snap
 
 -- Create FOV Circle
 local FOVCircle = Drawing.new("Circle")
@@ -565,37 +568,10 @@ end)
 -- AIMBOT SYSTEM
 -- =============================================
 local Camera = Workspace.CurrentCamera
-local TrackedMousePos = Vector2.zero
-
-local function RefreshMousePosition()
-    local inset = GuiService:GetGuiInset()
-    local rawPos = UserInputService:GetMouseLocation()
-    TrackedMousePos = Vector2.new(rawPos.X - inset.X, rawPos.Y - inset.Y)
-end
-
-RefreshMousePosition()
-
-UserInputService.InputChanged:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if input.UserInputType ~= Enum.UserInputType.MouseMovement then return end
-
-    local inset = GuiService:GetGuiInset()
-
-    if UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter then
-        local cam = Workspace.CurrentCamera or Camera
-        local screenSize = cam and cam.ViewportSize or Vector2.new(1920, 1080)
-        TrackedMousePos = TrackedMousePos + Vector2.new(input.Delta.X, input.Delta.Y)
-        TrackedMousePos = Vector2.new(
-            math.clamp(TrackedMousePos.X, 0, screenSize.X - inset.X),
-            math.clamp(TrackedMousePos.Y, 0, screenSize.Y - inset.Y)
-        )
-    else
-        RefreshMousePosition()
-    end
-end)
 
 local function GetMousePosition()
-    return TrackedMousePos
+    local rawPos = UserInputService:GetMouseLocation()
+    return Vector2.new(rawPos.X, rawPos.Y)
 end
 
 local function WorldToScreen(position)
@@ -619,6 +595,18 @@ local function IsPlayerValid(player)
     local targetPart = character:FindFirstChild(AimbotTarget)
     if not targetPart then return false end
     return true
+end
+
+local function IsTargetInFOV(player)
+    local character = player.Character
+    if not character then return false end
+    local targetPart = character:FindFirstChild(AimbotTarget)
+    if not targetPart then return false end
+    return GetDistanceFromMouse(targetPart.Position) <= AimbotFOV
+end
+
+local function ShouldKeepTarget(player)
+    return IsPlayerValid(player) and IsTargetInFOV(player)
 end
 
 local function MoveMouse(deltaX, deltaY)
@@ -657,6 +645,8 @@ local function GetClosestPlayer()
     return closestPlayer
 end
 
+local ActiveTween
+
 local function AimAt(player)
     if not player then return end
     local character = player.Character
@@ -668,22 +658,38 @@ local function AimAt(player)
     local screenPos, onScreen = WorldToScreen(targetPos)
     
     if onScreen then
-        local mousePos = GetMousePosition()
-        local delta = screenPos - mousePos
-        
-        -- Only move if delta is significant (prevents jitter)
-        if delta.Magnitude > 1 then
-            -- Smoothing: lower value = slower/smoother, higher = faster/snappier
-            local moveX = delta.X * AimbotSmoothing
-            local moveY = delta.Y * AimbotSmoothing
-            
-            -- Clamp movement to prevent overshooting
-            moveX = math.clamp(moveX, -50, 50)
-            moveY = math.clamp(moveY, -50, 50)
+        if AimbotLockMode == "Camera" then
+            if ActiveTween then
+                ActiveTween:Cancel()
+                ActiveTween = nil
+            end
 
-            if not MoveMouse(moveX, moveY) then
-                -- Fallback: snap camera toward target if mouse move APIs are missing
+            if AimbotCameraTween > 0 then
+                ActiveTween = TweenService:Create(Camera, TweenInfo.new(AimbotCameraTween, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {
+                    CFrame = CFrame.new(Camera.CFrame.Position, targetPos)
+                })
+                ActiveTween:Play()
+            else
                 Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPos)
+            end
+        else
+            local mousePos = GetMousePosition()
+            local delta = screenPos - mousePos
+            
+            -- Only move if delta is significant (prevents jitter)
+            if delta.Magnitude > 1 then
+                -- Smoothing: lower value = slower/smoother, higher = faster/snappier
+                local moveX = delta.X * AimbotSmoothing
+                local moveY = delta.Y * AimbotSmoothing
+                
+                -- Clamp movement to prevent overshooting
+                moveX = math.clamp(moveX, -50, 50)
+                moveY = math.clamp(moveY, -50, 50)
+
+                if not MoveMouse(moveX, moveY) then
+                    -- Fallback: snap camera toward target if mouse move APIs are missing
+                    Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPos)
+                end
             end
         end
     end
@@ -707,8 +713,7 @@ local function UpdateTracers()
     end
     
     local screenSize = Camera.ViewportSize
-    local inset = GuiService:GetGuiInset()
-    local bottomCenter = Vector2.new(screenSize.X / 2, screenSize.Y - inset.Y)
+    local bottomCenter = Vector2.new(screenSize.X / 2, screenSize.Y)
     
     local validPlayers = {}
     for _, player in pairs(Players:GetPlayers()) do
@@ -761,11 +766,6 @@ local function StartAimbot()
             -- Update camera reference (can change)
             Camera = Workspace.CurrentCamera
             
-            -- Keep tracked mouse in sync when unlocked
-            if UserInputService.MouseBehavior ~= Enum.MouseBehavior.LockCenter then
-                RefreshMousePosition()
-            end
-            
             -- Update FOV Circle position and settings
             if FOVCircleEnabled and AimbotEnabled then
                 local mousePos = GetMousePosition()
@@ -783,10 +783,15 @@ local function StartAimbot()
             
             -- Aimbot logic
             if AimbotEnabled and AimbotHeld then
-                local target = GetClosestPlayer()
-                if target then
-                    AimAt(target)
+                if not (CurrentTarget and ShouldKeepTarget(CurrentTarget)) then
+                    CurrentTarget = GetClosestPlayer()
                 end
+
+                if CurrentTarget then
+                    AimAt(CurrentTarget)
+                end
+            else
+                CurrentTarget = nil
             end
         end)
 
@@ -800,6 +805,10 @@ local function StopAimbot()
     if AimbotConnection then
         AimbotConnection:Disconnect()
         AimbotConnection = nil
+    end
+    if ActiveTween then
+        ActiveTween:Cancel()
+        ActiveTween = nil
     end
     FOVCircle.Visible = false
     ClearTracers()
@@ -820,12 +829,18 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     
     if input.UserInputType == Enum.UserInputType.MouseButton2 then
         AimbotHeld = true
+        CurrentTarget = GetClosestPlayer()
     end
 end)
 
 UserInputService.InputEnded:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton2 then
         AimbotHeld = false
+        CurrentTarget = nil
+        if ActiveTween then
+            ActiveTween:Cancel()
+            ActiveTween = nil
+        end
     end
 end)
 
@@ -870,6 +885,30 @@ AimbotSection:AddSlider('AimbotSmoothing', {
     Tooltip = 'Lower = smoother/slower, Higher = snappier',
     Callback = function(Value)
         AimbotSmoothing = Value
+    end
+})
+
+AimbotSection:AddDropdown('AimbotLockMode', {
+    Values = { 'Mouse', 'Camera' },
+    Default = 1,
+    Multi = false,
+    Text = 'Lock Mode',
+    Tooltip = 'Mouse = move cursor; Camera = rotate camera toward target',
+    Callback = function(Value)
+        AimbotLockMode = Value
+    end
+})
+
+AimbotSection:AddSlider('AimbotCameraTween', {
+    Text = 'Camera Lock Tween (s)',
+    Default = 0,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Compact = false,
+    Tooltip = '0 = instant snap, higher = slower camera tween (camera mode only)',
+    Callback = function(Value)
+        AimbotCameraTween = Value
     end
 })
 
