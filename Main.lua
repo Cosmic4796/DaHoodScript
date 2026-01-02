@@ -42,6 +42,32 @@ local CFrameSpeedValue = 1.5
 local CFrameFlyEnabled = false
 local CFrameFlySpeed = 50
 
+-- Aimbot Variables
+local AimbotEnabled = false
+local AimbotFOV = 100
+local AimbotTarget = "Head" -- "Head" or "HumanoidRootPart"
+local FOVCircleEnabled = true
+local FOVCircleTransparency = 0.5
+local FOVCircleColor = Color3.fromRGB(255, 255, 255)
+local TracersEnabled = false
+local TracerColor = Color3.fromRGB(255, 0, 0)
+local AimbotKey = Enum.UserInputType.MouseButton2 -- Right click to aim
+local CurrentTarget = nil
+local AimbotSmoothing = 0.5
+
+-- Create FOV Circle
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Thickness = 1
+FOVCircle.NumSides = 64
+FOVCircle.Radius = AimbotFOV
+FOVCircle.Filled = false
+FOVCircle.Visible = false
+FOVCircle.Color = FOVCircleColor
+FOVCircle.Transparency = 1 - FOVCircleTransparency
+
+-- Tracer storage
+local TracerLines = {}
+
 -- Create Window
 local Window = Library:CreateWindow({
     Title = 'Da Hood',
@@ -54,6 +80,7 @@ local Window = Library:CreateWindow({
 -- Create Tabs
 local Tabs = {
     Main = Window:AddTab('Main'),
+    Aimbot = Window:AddTab('Aimbot'),
     Visuals = Window:AddTab('Visuals'),
     Settings = Window:AddTab('Settings')
 }
@@ -72,6 +99,11 @@ end
 
 local function GetDistance(pos1, pos2)
     return (pos1 - pos2).Magnitude
+end
+
+local function IsTyping()
+    -- Check if user is typing in chat or any textbox
+    return UserInputService:GetFocusedTextBox() ~= nil
 end
 
 -- =============================================
@@ -500,6 +532,7 @@ end
 -- Fly vertical controls (Space/Ctrl)
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
+    if IsTyping() then return end
     if not CFrameFlyEnabled then return end
     
     if input.KeyCode == Enum.KeyCode.Space then 
@@ -518,6 +551,306 @@ UserInputService.InputEnded:Connect(function(input)
         FlyDownHeld = false 
     end
 end)
+
+-- =============================================
+-- MAIN TAB UI
+-- =============================================
+
+-- =============================================
+-- AIMBOT SYSTEM
+-- =============================================
+local Camera = Workspace.CurrentCamera
+
+local function GetMousePosition()
+    return UserInputService:GetMouseLocation()
+end
+
+local function WorldToScreen(position)
+    local screenPos, onScreen = Camera:WorldToViewportPoint(position)
+    return Vector2.new(screenPos.X, screenPos.Y), onScreen, screenPos.Z
+end
+
+local function GetDistanceFromMouse(position)
+    local screenPos, onScreen = WorldToScreen(position)
+    if not onScreen then return math.huge end
+    local mousePos = GetMousePosition()
+    return (screenPos - mousePos).Magnitude
+end
+
+local function IsPlayerValid(player)
+    if player == LocalPlayer then return false end
+    local character = player.Character
+    if not character then return false end
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid or humanoid.Health <= 0 then return false end
+    local targetPart = character:FindFirstChild(AimbotTarget)
+    if not targetPart then return false end
+    return true
+end
+
+local function GetClosestPlayer()
+    local closestPlayer = nil
+    local closestDistance = AimbotFOV
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if IsPlayerValid(player) then
+            local character = player.Character
+            local targetPart = character:FindFirstChild(AimbotTarget)
+            if targetPart then
+                local distance = GetDistanceFromMouse(targetPart.Position)
+                if distance < closestDistance then
+                    closestDistance = distance
+                    closestPlayer = player
+                end
+            end
+        end
+    end
+    
+    return closestPlayer
+end
+
+local function AimAt(player)
+    if not player then return end
+    local character = player.Character
+    if not character then return end
+    local targetPart = character:FindFirstChild(AimbotTarget)
+    if not targetPart then return end
+    
+    local targetPos = targetPart.Position
+    local screenPos, onScreen = WorldToScreen(targetPos)
+    
+    if onScreen then
+        local currentPos = GetMousePosition()
+        local delta = screenPos - currentPos
+        
+        -- Apply smoothing
+        local smoothedDelta = delta * AimbotSmoothing
+        
+        mousemoverel(smoothedDelta.X, smoothedDelta.Y)
+    end
+end
+
+-- Clear all tracers
+local function ClearTracers()
+    for _, line in pairs(TracerLines) do
+        if line then
+            line:Remove()
+        end
+    end
+    TracerLines = {}
+end
+
+-- Update tracers
+local function UpdateTracers()
+    ClearTracers()
+    
+    if not TracersEnabled then return end
+    
+    local screenSize = Camera.ViewportSize
+    local bottomCenter = Vector2.new(screenSize.X / 2, screenSize.Y)
+    
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and IsPlayerValid(player) then
+            local character = player.Character
+            local hrp = character and character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local screenPos, onScreen, depth = WorldToScreen(hrp.Position)
+                if onScreen and depth > 0 then
+                    local line = Drawing.new("Line")
+                    line.From = bottomCenter
+                    line.To = screenPos
+                    line.Color = TracerColor
+                    line.Thickness = 1
+                    line.Transparency = 1
+                    line.Visible = true
+                    table.insert(TracerLines, line)
+                end
+            end
+        end
+    end
+end
+
+-- Aimbot update loop
+local AimbotConnection
+local AimbotHeld = false
+
+local function StartAimbot()
+    if AimbotConnection then return end
+    
+    AimbotConnection = RunService.RenderStepped:Connect(function()
+        -- Update FOV Circle position and settings
+        if FOVCircleEnabled and AimbotEnabled then
+            local mousePos = GetMousePosition()
+            FOVCircle.Position = mousePos
+            FOVCircle.Radius = AimbotFOV
+            FOVCircle.Color = FOVCircleColor
+            FOVCircle.Transparency = 1 - FOVCircleTransparency
+            FOVCircle.Visible = true
+        else
+            FOVCircle.Visible = false
+        end
+        
+        -- Update tracers
+        if TracersEnabled then
+            pcall(UpdateTracers)
+        else
+            ClearTracers()
+        end
+        
+        -- Aimbot logic
+        if AimbotEnabled and AimbotHeld then
+            local target = GetClosestPlayer()
+            if target then
+                AimAt(target)
+            end
+        end
+    end)
+end
+
+local function StopAimbot()
+    if AimbotConnection then
+        AimbotConnection:Disconnect()
+        AimbotConnection = nil
+    end
+    FOVCircle.Visible = false
+    ClearTracers()
+end
+
+-- Aimbot input handling (right click to aim)
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if IsTyping() then return end
+    
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        AimbotHeld = true
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        AimbotHeld = false
+    end
+end)
+
+-- =============================================
+-- AIMBOT TAB UI
+-- =============================================
+local AimbotSection = Tabs.Aimbot:AddLeftGroupbox('Aimbot')
+
+AimbotSection:AddToggle('AimbotEnabled', {
+    Text = 'Enable Aimbot',
+    Default = false,
+    Tooltip = 'Right-click to aim at players',
+    Callback = function(Value)
+        AimbotEnabled = Value
+        if Value then
+            StartAimbot()
+            Library:Notify('Aimbot enabled! Right-click to aim', 2)
+        else
+            StopAimbot()
+            Library:Notify('Aimbot disabled', 2)
+        end
+    end
+})
+
+AimbotSection:AddDropdown('AimbotTargetPart', {
+    Values = { 'Head', 'HumanoidRootPart' },
+    Default = 1,
+    Multi = false,
+    Text = 'Target Part',
+    Tooltip = 'Which body part to aim at',
+    Callback = function(Value)
+        AimbotTarget = Value
+    end
+})
+
+AimbotSection:AddSlider('AimbotSmoothing', {
+    Text = 'Smoothing',
+    Default = 0.5,
+    Min = 0.1,
+    Max = 1,
+    Rounding = 2,
+    Compact = false,
+    Tooltip = 'Lower = smoother/slower, Higher = snappier',
+    Callback = function(Value)
+        AimbotSmoothing = Value
+    end
+})
+
+-- FOV Section
+local FOVSection = Tabs.Aimbot:AddRightGroupbox('FOV Circle')
+
+FOVSection:AddToggle('FOVCircleEnabled', {
+    Text = 'Show FOV Circle',
+    Default = true,
+    Tooltip = 'Shows the FOV circle on screen',
+    Callback = function(Value)
+        FOVCircleEnabled = Value
+        FOVCircle.Visible = Value and AimbotEnabled
+    end
+})
+
+FOVSection:AddSlider('FOVSize', {
+    Text = 'FOV Size',
+    Default = 100,
+    Min = 20,
+    Max = 500,
+    Rounding = 0,
+    Compact = false,
+    Tooltip = 'Size of the aimbot FOV',
+    Callback = function(Value)
+        AimbotFOV = Value
+        FOVCircle.Radius = Value
+    end
+})
+
+FOVSection:AddSlider('FOVTransparency', {
+    Text = 'FOV Transparency',
+    Default = 0.5,
+    Min = 0,
+    Max = 1,
+    Rounding = 2,
+    Compact = false,
+    Tooltip = '0 = invisible, 1 = fully visible',
+    Callback = function(Value)
+        FOVCircleTransparency = Value
+        FOVCircle.Transparency = 1 - Value
+    end
+})
+
+FOVSection:AddLabel('FOV Color'):AddColorPicker('FOVColor', {
+    Default = Color3.fromRGB(255, 255, 255),
+    Title = 'FOV Circle Color',
+    Transparency = 0,
+    Callback = function(Value)
+        FOVCircleColor = Value
+        FOVCircle.Color = Value
+    end
+})
+
+-- Tracers Section
+local TracerSection = Tabs.Aimbot:AddLeftGroupbox('Tracers')
+
+TracerSection:AddToggle('TracersEnabled', {
+    Text = 'Enable Tracers',
+    Default = false,
+    Tooltip = 'Shows lines from screen bottom to players',
+    Callback = function(Value)
+        TracersEnabled = Value
+        if not Value then
+            ClearTracers()
+        end
+    end
+})
+
+TracerSection:AddLabel('Tracer Color'):AddColorPicker('TracerColor', {
+    Default = Color3.fromRGB(255, 0, 0),
+    Title = 'Tracer Color',
+    Transparency = 0,
+    Callback = function(Value)
+        TracerColor = Value
+    end
+})
 
 -- =============================================
 -- MAIN TAB UI
@@ -738,11 +1071,16 @@ MenuSection:AddButton({
         MoneyESPEnabled = false
         CFrameSpeedEnabled = false
         CFrameFlyEnabled = false
+        AimbotEnabled = false
+        TracersEnabled = false
         StopCashAura()
         StopCashDrop()
         StopMoneyESP()
         StopCFrameSpeed()
         StopCFrameFly()
+        StopAimbot()
+        FOVCircle:Remove()
+        ClearTracers()
         if ESPUpdateConnection then
             ESPUpdateConnection:Disconnect()
         end
@@ -762,6 +1100,23 @@ MenuSection:AddLabel('Menu Keybind'):AddKeyPicker('MenuKeybind', {
 })
 
 Library.ToggleKeybind = Options.MenuKeybind
+
+-- Disable keybinds when typing in chat/textboxes
+-- Override Linoria's key check to ignore inputs while typing
+local OldKeyCheck = getmetatable(Options).__index
+getmetatable(Options).__index = function(self, key)
+    local option = OldKeyCheck(self, key)
+    return option
+end
+
+-- Block keybinds when focused on textbox (chat)
+UserInputService.TextBoxFocused:Connect(function()
+    Library:SetKeybindState(false)
+end)
+
+UserInputService.TextBoxFocusReleased:Connect(function()
+    Library:SetKeybindState(true)
+end)
 
 -- Theme and Save Manager Setup
 ThemeManager:SetLibrary(Library)
