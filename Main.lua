@@ -26,6 +26,10 @@ local CashDropDelay = 5
 local ESPEnabled = false
 local ShowNames = true
 local MoneyESPEnabled = false
+local ESPColor = Color3.fromRGB(255, 0, 0)
+local ESPTextColor = Color3.fromRGB(255, 255, 255)
+local ESPTextSize = 14
+local UseHealthColor = true
 local ESPObjects = {}
 local MoneyESPObjects = {}
 
@@ -136,7 +140,7 @@ local function StartCashDrop()
     CashDropConnection = task.spawn(function()
         while CashDropEnabled do
             DropCash(15000)
-            task.wait(CashDropDelay)
+            task.wait(1) -- Spam as fast as possible
         end
     end)
 end
@@ -170,16 +174,17 @@ local function CreateESP(player)
     nameLabel.BackgroundTransparency = 1
     nameLabel.Size = UDim2.new(1, 0, 1, 0)
     nameLabel.Font = Enum.Font.GothamBold
-    nameLabel.TextSize = 14
-    nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    nameLabel.TextSize = ESPTextSize
+    nameLabel.TextColor3 = ESPTextColor
     nameLabel.TextStrokeTransparency = 0
     nameLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
     
-    -- Create Highlight (lightweight, no fill)
+    -- Create Highlight
     local highlight = Instance.new('Highlight')
-    highlight.FillTransparency = 1
+    highlight.FillTransparency = 0.75
+    highlight.FillColor = ESPColor
     highlight.OutlineTransparency = 0
-    highlight.OutlineColor = Color3.fromRGB(255, 0, 0)
+    highlight.OutlineColor = ESPColor
     highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
     
     ESPObjects[player] = {
@@ -205,6 +210,10 @@ local function CreateESP(player)
             billboard.Parent = head
             billboard.Enabled = ShowNames
             
+            -- Update text settings
+            nameLabel.TextSize = ESPTextSize
+            nameLabel.TextColor3 = ESPTextColor
+            
             highlight.Parent = character
             highlight.Enabled = true
             
@@ -213,14 +222,22 @@ local function CreateESP(player)
             local maxHealth = math.floor(humanoid.MaxHealth)
             nameLabel.Text = ShowNames and string.format('%s [%d/%d]', player.Name, health, maxHealth) or ''
             
-            -- Color based on health
-            local healthPercent = humanoid.Health / humanoid.MaxHealth
-            if healthPercent > 0.5 then
-                highlight.OutlineColor = Color3.fromRGB(0, 255, 0)
-            elseif healthPercent > 0.25 then
-                highlight.OutlineColor = Color3.fromRGB(255, 255, 0)
+            -- Color based on health or custom color
+            if UseHealthColor then
+                local healthPercent = humanoid.Health / humanoid.MaxHealth
+                local color
+                if healthPercent > 0.5 then
+                    color = Color3.fromRGB(0, 255, 0)
+                elseif healthPercent > 0.25 then
+                    color = Color3.fromRGB(255, 255, 0)
+                else
+                    color = Color3.fromRGB(255, 0, 0)
+                end
+                highlight.OutlineColor = color
+                highlight.FillColor = color
             else
-                highlight.OutlineColor = Color3.fromRGB(255, 0, 0)
+                highlight.OutlineColor = ESPColor
+                highlight.FillColor = ESPColor
             end
         else
             billboard.Enabled = false
@@ -385,15 +402,15 @@ CashSection:AddSlider('CashRange', {
 CashSection:AddToggle('CashDrop', {
     Text = 'Auto Drop $15,000',
     Default = false,
-    Tooltip = 'Drops $15,000 every 5 seconds',
+    Tooltip = 'Spams dropping $15,000',
     Callback = function(Value)
         CashDropEnabled = Value
         if Value then
             StartCashDrop()
-            Library:Notify('Auto dropping $15,000 every 5 seconds', 2)
+            Library:Notify('Spamming cash drop!', 2)
         else
             StopCashDrop()
-            Library:Notify('Stopped auto drop', 2)
+            Library:Notify('Stopped cash drop', 2)
         end
     end
 })
@@ -423,6 +440,45 @@ ESPSection:AddToggle('ShowNames', {
     Tooltip = 'Shows player names above heads',
     Callback = function(Value)
         ShowNames = Value
+    end
+})
+
+ESPSection:AddToggle('UseHealthColor', {
+    Text = 'Health-Based Color',
+    Default = true,
+    Tooltip = 'Changes ESP color based on player health',
+    Callback = function(Value)
+        UseHealthColor = Value
+    end
+})
+
+ESPSection:AddLabel('ESP Color'):AddColorPicker('ESPColor', {
+    Default = Color3.fromRGB(255, 0, 0),
+    Title = 'ESP Color',
+    Transparency = 0,
+    Callback = function(Value)
+        ESPColor = Value
+    end
+})
+
+ESPSection:AddLabel('Text Color'):AddColorPicker('TextColor', {
+    Default = Color3.fromRGB(255, 255, 255),
+    Title = 'Text Color',
+    Transparency = 0,
+    Callback = function(Value)
+        ESPTextColor = Value
+    end
+})
+
+ESPSection:AddSlider('TextSize', {
+    Text = 'Text Size',
+    Default = 14,
+    Min = 8,
+    Max = 24,
+    Rounding = 0,
+    Compact = false,
+    Callback = function(Value)
+        ESPTextSize = Value
     end
 })
 
